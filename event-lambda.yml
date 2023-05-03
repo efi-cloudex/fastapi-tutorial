@@ -4,7 +4,7 @@ Description: EventBridge to SQS to Lambda example
 
 Parameters:
   LambdaFunctionName:
-    Description: Name of the Lambda function
+    Description: Name of the Lambda function. Delete me
     Type: String
 
   LambdaTimeout:
