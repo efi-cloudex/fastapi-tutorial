@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: EventBridge to SQS to Lambda example
+
+Parameters:
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Type: String
+
+  LambdaTimeout:
+    Description: Timeout of the Lambda function in seconds
+    Type: Number
+    Default: 30
+
+  SQSVisibilityTimeout:
+    Description: Visibility timeout for the SQS queue
+    Type: Number
+    Default: 60
+
+  CronSchedule:
+    Description: Cron schedule expression for EventBridge
+    Type: String
+    Default: 'cron(0 * * * ? *)' # Every 1 hour
+
+  Prefix:
+    Description: Prefix for all resources.
+    Type: String
+    Default: dev
+
+Resources:
+  MyEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: !Ref CronSchedule
+      Targets:
+        - Id: MySQSQueue
+          Arn: !GetAtt MySQSQueue.Arn
+
+  MySQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Prefix}-${AWS::StackName}-EB-SQS
+      VisibilityTimeout: !Ref SQSVisibilityTimeout
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-${AWS::StackName}-EB-SQS
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt MyDLQ.Arn
+        maxReceiveCount: 3
+
+  MyDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Prefix}-${AWS::StackName}-EB-SQS-DLQ
+      Tags:
+        - Key: Name
+          Value: !Sub ${Prefix}-${AWS::StackName}-EB-SQS-DLQ
+
+  MySQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 'sqs:SendMessage'
+            Resource: !GetAtt MySQSQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt MyEventRule.Arn
+      Queues:
+        - !Ref MySQSQueue
+
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${Prefix}-${AWS::StackName}-${LambdaFunctionName}
+      Handler: index.handler
+      Timeout: !Ref LambdaTimeout
+      Runtime: python3.10
+      Tags:
+        Key: Name
+        Value: !Sub ${Prefix}-${AWS::StackName}-${LambdaFunctionName}
+      InlineCode: |
+        import json
+
+        def handler(event, context):
+            for record in event['Records']:
+                event_detail = json.loads(record['body'])
+
+                event_id = event_detail['id']
+                event_time = event_detail['time']
+                event_region = event_detail['region']
+                event_resources = event_detail['resources']
+
+                print(f'Event ID: {event_id}')
+                print(f'Event Time: {event_time}')
+                print(f'Event Region: {event_region}')
+                print(f'Event Resources: {event_resources}')
+
+      Events:
+        SqsEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MySQSQueue.Arn
+            BatchSize: 1
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !Ref MySQSQueue
+
+Outputs:
+  LambdaFunction:
+    Description: Lambda function ARN
+    Value: !GetAtt LambdaFunction.Arn
+  EventRule:
+    Description: EventBridge Rule ARN
+    Value: !GetAtt MyEventRule.Arn
+  SQSQueueName:
+    Description: SQS Queue name
+    Value: !Ref MySQSQueue
